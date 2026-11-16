@@ -1,0 +1,62 @@
+# 05-proofpack（核证匣）
+
+Proofpack — 举证放行：采样抽取 → 证据打包 → 校验清单 → 放行/驳回闭环。
+
+与 Feedstitch（多源归并）、Batchgate（作业编排）、Syncledger（双端对账）、Changecast（CDC 投影）主链路不同。夹具全本地，不连活库。
+
+## 启动
+
+```bash
+docker compose up --build
+```
+
+| 入口 | 地址 |
+| --- | --- |
+| 前端 | http://localhost:5500 |
+| API | http://localhost:10500 |
+
+## 主链
+
+选举证对象 → 按固定种子采样 → 生成证据包（含指纹）→ 按**当前启用规则版本**跑校验清单 → 启用项全过才可放行，否则驳回并留痕
+
+## 种子举证对象
+
+- 门店日结抽检
+- 渠道结算抽检
+- 价目变更核证
+
+## 可配置校验清单
+
+检查项不再写死：在「规则版本」页增删、启停检查项，发布即生成新的规则版本并启用；
+清单支持条数一致、键唯一、必填非空（必填字段可自定义）。规则版本号落库，
+清单结果整批绑定版本，放行留痕写明依据的规则版本与清单运行。
+
+放行门槛恒以**当前启用项全部通过**为准，不提供开关；缺跑、任一项未过、或规则已换版均拒放行。
+
+### 固定互斥策略（全局单选，不做并存开关）
+
+- 规则变更后历史「清单通过」：**作废**，须按新规则复检通过后才可放行；
+  放行留痕必定写明依据版本。
+- 规则变更与在飞放行冲突：**放行写入时比对版本**，若发现规则版本已变则拒绝该次放行，
+  且不写出通过留痕。
+
+## 技术栈
+
+Python 3.12 + FastAPI + SQLite；Vue 3 + Vite + Nginx。
+
+## 本地后端
+
+```bash
+cd backend
+pip install -r requirements.txt
+set DATA_DIR=%TEMP%\proofpack-data
+uvicorn app.main:app --host 127.0.0.1 --port 10500
+```
+
+## 测试
+
+```bash
+cd backend
+pip install -r requirements.txt
+python -m pytest tests -q
+```
