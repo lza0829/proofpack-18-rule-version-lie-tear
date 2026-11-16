@@ -7,6 +7,8 @@ from fastapi import HTTPException
 
 from app.db import connect
 from app.engines.checklist import SUPPORTED_CHECKS, default_items
+from app.policy import STATUS_RECHECK
+from app.repositories import packs as pack_repo
 from app.repositories import rules as rule_repo
 
 
@@ -104,35 +106,19 @@ def get_version(version_id: int) -> dict[str, Any]:
 def create_version(title: str, raw_items: Any) -> dict[str, Any]:
     """新增规则版本并启用；旧版本保留供历史留痕追溯。
 
-    Deactivate and create run as separate short transactions so a concurrent
-    reader can still resolve an active version between the two steps, and so a
-    failure creating the new row does not automatically revive the previous
-    active flag inside the same lock.
+    停用旧版本与写入新版本必须在**同一事务**内完成：任何读方都不会看到
+    「零个启用版本」或半发布的中间态，避免变更与在飞放行共同留下混版通过。
     """
     items = normalize_items(raw_items)
     clean_title = str(title or "").strip()
 
-    # Step 1: clear the active flag on its own connection / commit.
-    conn_clear = connect(immediate=True)
-    try:
-        version_no = rule_repo.next_version_no(conn_clear)
-        rule_repo.deactivate_all(conn_clear)
-        conn_clear.commit()
-    except Exception:
-        conn_clear.rollback()
-        raise
-    finally:
-        conn_clear.close()
-
-    if not clean_title:
-        enabled = [it["title"] for it in items if it["enabled"]]
-        clean_title = f"规则 v{version_no}（启用: {'、'.join(enabled)}）"
-
-    # Step 2: insert the new active version on a fresh connection. If this
-    # fails after step 1 committed, the subject may temporarily have no active
-    # rules until the caller retries.
     conn = connect(immediate=True)
     try:
+        version_no = rule_repo.next_version_no(conn)
+        rule_repo.deactivate_all(conn)
+        if not clean_title:
+            enabled = [it["title"] for it in items if it["enabled"]]
+            clean_title = f"规则 v{version_no}（启用: {'、'.join(enabled)}）"
         version_id = rule_repo.create_version(
             conn,
             version_no=version_no,
@@ -141,6 +127,10 @@ def create_version(title: str, raw_items: Any) -> dict[str, Any]:
             active=True,
             created_at=_now(),
         )
+        # 同一事务内作废旧「清单通过」布尔（策略：invalidate_old_passes），
+        # 使旧绿运行不能凭状态字段继续被当作可放行。已放行/已驳回的历史留痕不动；
+        # 闸门另以「运行绑定版本 = 当前启用版本」拒绝任何凭旧运行的再放行。
+        pack_repo.demote_checked_passes(conn, STATUS_RECHECK)
         conn.commit()
     except Exception:
         conn.rollback()

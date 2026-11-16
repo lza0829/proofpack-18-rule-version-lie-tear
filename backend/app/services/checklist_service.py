@@ -87,6 +87,8 @@ def run_checklist(pack_id: int) -> dict[str, Any]:
             )
 
         pack_repo.update_status(conn, pack_id, "checked_ok" if all_ok else "checked_fail")
+        # 复检即解除「待复检」：本次运行已绑定当前启用版本并覆盖其全部启用项；
+        # 若仍未过，包停在 checked_fail，不能放行。
         stored = check_repo.results_for_run(conn, run_id)
         conn.commit()
     except Exception:

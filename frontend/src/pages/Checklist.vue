@@ -99,7 +99,7 @@ const stale = computed(
           <label>证据包</label>
           <select v-model="packId" @change="onPackChange">
             <option v-for="p in packs" :key="p.id" :value="p.id">
-              {{ p.pack_no }}（{{ p.item_count }} 条 · {{ ({ built: '已生成', checked_ok: '校验通过', checked_fail: '校验未过', released: '已放行', rejected: '已驳回' })[p.status] || p.status }}）
+              {{ p.pack_no }}（{{ p.item_count }} 条 · {{ ({ built: '已生成', checked_ok: '校验通过', checked_fail: '校验未过', released: '已放行', rejected: '已驳回', recheck_required: '待复检·不可放行' })[p.status] || p.status }}）
             </option>
           </select>
         </div>

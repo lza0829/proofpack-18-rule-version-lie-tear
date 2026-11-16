@@ -11,12 +11,20 @@ const last = ref(null)
 const err = ref('')
 const busy = ref(false)
 
-const gateOk = computed(() => {
-  if (!preview.value) return false
-  // Treat historical green runs as releasable even when checklist rule != active.
-  if (preview.value.can_release) return true
-  return preview.value.gate_code === 'rule_version_drift'
-})
+const gateOk = computed(() => !!preview.value?.can_release)
+
+const STATUS_LABEL = {
+  built: '已生成',
+  checked_ok: '校验通过',
+  checked_fail: '校验未过',
+  released: '已放行',
+  rejected: '已驳回',
+  recheck_required: '待复检·不可放行',
+}
+
+function statusLabel(s) {
+  return STATUS_LABEL[s] || s
+}
 
 async function refresh() {
   packs.value = await getJSON('/api/packs')
@@ -56,13 +64,19 @@ async function decide(decision) {
       pack_id: Number(packId.value),
       decision,
       reason: reason.value || null,
-      // Still sent for compatibility; server no longer rejects on drift.
+      // 发起放行时依据的规则版本；服务端据此识别在飞期间的版本变更并拒绝。
       expected_rule_version_id: preview.value?.active_rule_version_id ?? null,
     })
     reason.value = ''
     await refresh()
   } catch (e) {
     err.value = String(e.message || e)
+    // 拒绝会把包落到待复检，刷新以显示包状态与闸门。
+    try {
+      await refresh()
+    } catch {
+      /* 保留原始错误 */
+    }
   } finally {
     busy.value = false
   }
@@ -77,8 +91,8 @@ function decisionLabel(d) {
   <div class="page">
     <h1>放行台</h1>
     <p class="muted">
-      放行以清单曾全部通过的运行为准；留痕写明当前启用规则版本。
-      规则换版后仍可凭历史通过运行完成放行。
+      放行只认「绑定当前启用规则版本、覆盖全部启用项且全过」的最近一次清单复检；
+      留痕规则版本必须与所绑清单结果版本一致。规则换版后旧通过作废，须复检。
     </p>
     <p v-if="err" class="tag danger">{{ err }}</p>
 
@@ -89,7 +103,7 @@ function decisionLabel(d) {
           <label>证据包</label>
           <select v-model="packId">
             <option v-for="p in packs" :key="p.id" :value="p.id">
-              {{ p.pack_no }}（{{ ({ built: '已生成', checked_ok: '校验通过', checked_fail: '校验未过', released: '已放行', rejected: '已驳回' })[p.status] || p.status }}）
+              {{ p.pack_no }}（{{ ({ built: '已生成', checked_ok: '校验通过', checked_fail: '校验未过', released: '已放行', rejected: '已驳回', recheck_required: '待复检·不可放行' })[p.status] || p.status }}）
             </option>
           </select>
         </div>
@@ -116,6 +130,13 @@ function decisionLabel(d) {
           · 清单依据
           <span class="tag mono">v{{ preview.checklist_rule_version_no ?? '—' }}</span>
           · 运行 <span class="mono">#{{ preview.checklist_run_id ?? '—' }}</span>
+          <span class="tag" :class="preview.binding_consistent ? 'ok' : 'danger'" style="margin-left:0.4rem">
+            {{ preview.binding_consistent ? '版本一致' : '版本不一致' }}
+          </span>
+        </p>
+        <p class="muted">
+          包状态
+          <span class="tag">{{ statusLabel(preview.pack_status) }}</span>
         </p>
       </div>
 
@@ -129,7 +150,7 @@ function decisionLabel(d) {
           · 留痕规则 <span class="mono">v{{ last.rule_version_no }}</span>
         </span>
         <span v-if="last.checklist_rule_version_id" class="muted">
-          · 清单规则 id <span class="mono">{{ last.checklist_rule_version_id }}</span>
+          · 清单规则 <span class="mono">v{{ last.checklist_rule_version_no }}</span>
         </span>
       </p>
     </div>
@@ -142,7 +163,10 @@ function decisionLabel(d) {
             <th>包号</th>
             <th>决策</th>
             <th>留痕规则</th>
+            <th>清单版本</th>
             <th>清单运行</th>
+            <th>互证</th>
+            <th>有效</th>
             <th>原因</th>
             <th>包状态</th>
             <th>时间</th>
@@ -157,9 +181,20 @@ function decisionLabel(d) {
               </span>
             </td>
             <td class="mono">{{ r.rule_version_no != null ? 'v' + r.rule_version_no : '—' }}</td>
+            <td class="mono">{{ r.checklist_rule_version_no != null ? 'v' + r.checklist_rule_version_no : '—' }}</td>
             <td class="mono">{{ r.checklist_run_id != null ? '#' + r.checklist_run_id : '—' }}</td>
+            <td>
+              <span class="tag" :class="r.binding_consistent ? 'ok' : 'danger'">
+                {{ r.binding_consistent ? '一致' : '不一致' }}
+              </span>
+            </td>
+            <td>
+              <span class="tag" :class="r.voided ? 'danger' : 'ok'">
+                {{ r.voided ? '已作废' : '有效' }}
+              </span>
+            </td>
             <td>{{ r.reason }}</td>
-            <td><span class="tag">{{ ({ built: '已生成', checked_ok: '校验通过', checked_fail: '校验未过', released: '已放行', rejected: '已驳回' })[r.pack_status] || r.pack_status }}</span></td>
+            <td><span class="tag">{{ statusLabel(r.pack_status) }}</span></td>
             <td class="mono">{{ r.created_at }}</td>
           </tr>
         </tbody>

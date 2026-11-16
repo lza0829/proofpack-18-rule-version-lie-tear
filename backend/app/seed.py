@@ -73,6 +73,42 @@ def _migrate(conn) -> None:
     _ensure_column(conn, "release_decisions", "rule_version_id", "INTEGER")
     _ensure_column(conn, "release_decisions", "rule_version_no", "INTEGER")
     _ensure_column(conn, "release_decisions", "checklist_run_id", "INTEGER")
+    # 作废标记：旧通过留痕在规则变更/版本撒谎清理时被作废，不再作为放行依据。
+    _ensure_column(conn, "release_decisions", "voided", "INTEGER NOT NULL DEFAULT 0")
+
+    # 一次性清理历史「混版通过」：留痕规则版本 != 所绑清单运行版本（或未绑运行）
+    # 的通过留痕，一律作废，并把这些包降为待复检，避免它们继续冒充可放行。
+    conn.execute(
+        """
+        UPDATE release_decisions
+        SET voided=1
+        WHERE decision='pass'
+          AND voided=0
+          AND (
+                checklist_run_id IS NULL
+             OR rule_version_id IS NULL
+             OR NOT EXISTS (
+                    SELECT 1 FROM checklist_runs r
+                    WHERE r.id = release_decisions.checklist_run_id
+                      AND r.rule_version_id = release_decisions.rule_version_id
+                      AND r.rule_version_no = release_decisions.rule_version_no
+                )
+          )
+        """
+    )
+    conn.execute(
+        """
+        UPDATE evidence_packs
+        SET status='recheck_required'
+        WHERE status IN ('checked_ok', 'released')
+          AND EXISTS (
+                SELECT 1 FROM release_decisions d
+                WHERE d.pack_id = evidence_packs.id
+                  AND d.decision='pass'
+                  AND d.voided=1
+          )
+        """
+    )
 
     for key in OBSOLETE_SETTINGS:
         conn.execute("DELETE FROM settings WHERE key=?", (key,))
@@ -184,6 +220,7 @@ def init_db() -> None:
                 rule_version_id INTEGER,
                 rule_version_no INTEGER,
                 checklist_run_id INTEGER,
+                voided INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(pack_id) REFERENCES evidence_packs(id),
                 FOREIGN KEY(rule_version_id) REFERENCES rule_versions(id)

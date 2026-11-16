@@ -92,3 +92,11 @@ def list_items(conn: sqlite3.Connection, pack_id: int) -> list[dict[str, Any]]:
 
 def update_status(conn: sqlite3.Connection, pack_id: int, status: str) -> None:
     conn.execute("UPDATE evidence_packs SET status=? WHERE id=?", (status, pack_id))
+
+
+def demote_checked_passes(conn: sqlite3.Connection, status: str) -> int:
+    """规则换版时作废旧「清单通过」布尔：只降级 checked_ok，不动已放行/已驳回。"""
+    cur = conn.execute(
+        "UPDATE evidence_packs SET status=? WHERE status='checked_ok'", (status,)
+    )
+    return int(cur.rowcount)
